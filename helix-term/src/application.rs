@@ -190,7 +190,6 @@ impl Application {
         let mut cx = crate::compositor::Context {
             editor: &mut self.editor,
             jobs: &mut self.jobs,
-            scroll: None,
         };
 
         self.compositor.render(&mut cx);
@@ -336,7 +335,6 @@ impl Application {
         let mut cx = crate::compositor::Context {
             editor: &mut self.editor,
             jobs: &mut self.jobs,
-            scroll: None,
         };
         if let EventResult::Consumed(_) = editor_view.handle_idle_timeout(&mut cx) {
             self.render();
@@ -347,7 +345,6 @@ impl Application {
         let mut cx = crate::compositor::Context {
             editor: &mut self.editor,
             jobs: &mut self.jobs,
-            scroll: None,
         };
         // Handle key events
         let should_redraw = match event {

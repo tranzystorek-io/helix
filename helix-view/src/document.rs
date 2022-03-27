@@ -19,7 +19,9 @@ use helix_core::{
     ChangeSet, Diagnostic, LineEnding, Rope, RopeBuilder, Selection, State, Syntax, Transaction,
     DEFAULT_LINE_ENDING,
 };
-use helix_lsp::util::LspFormatting;
+
+#[cfg(feature = "lsp")]
+use helix_lsp::lsp;
 
 use crate::{DocumentId, Editor, ViewId};
 
@@ -119,6 +121,7 @@ pub struct Document {
     pub(crate) modified_since_accessed: bool,
 
     diagnostics: Vec<Diagnostic>,
+    #[cfg(feature = "lsp")]
     language_server: Option<Arc<helix_lsp::Client>>,
 }
 
@@ -142,7 +145,6 @@ impl fmt::Debug for Document {
             .field("version", &self.version)
             .field("modified_since_accessed", &self.modified_since_accessed)
             .field("diagnostics", &self.diagnostics)
-            // .field("language_server", &self.language_server)
             .finish()
     }
 }
@@ -330,7 +332,6 @@ where
     *mut_ref = f(mem::take(mut_ref));
 }
 
-use helix_lsp::lsp;
 use url::Url;
 
 impl Document {
@@ -359,6 +360,7 @@ impl Document {
             savepoint: None,
             last_saved_revision: 0,
             modified_since_accessed: false,
+            #[cfg(feature = "lsp")]
             language_server: None,
         }
     }
@@ -394,9 +396,10 @@ impl Document {
         Ok(doc)
     }
 
+    #[cfg(feature = "lsp")]
     /// The same as [`format`], but only returns formatting changes if auto-formatting
     /// is configured.
-    pub fn auto_format(&self) -> Option<impl Future<Output = LspFormatting> + 'static> {
+    pub fn auto_format(&self) -> Option<impl Future<Output = Transaction> + 'static> {
         if self.language_config()?.auto_format {
             self.format()
         } else {
@@ -404,9 +407,12 @@ impl Document {
         }
     }
 
+    #[cfg(feature = "lsp")]
     /// If supported, returns the changes that should be applied to this document in order
     /// to format it nicely.
-    pub fn format(&self) -> Option<impl Future<Output = LspFormatting> + 'static> {
+    pub fn format(&self) -> Option<impl Future<Output = Transaction> + 'static> {
+        use helix_lsp::util::generate_transaction_from_edits;
+
         let language_server = self.language_server()?;
         let text = self.text.clone();
         let offset_encoding = language_server.offset_encoding();
@@ -421,11 +427,7 @@ impl Document {
                 log::warn!("LSP formatting failed: {}", e);
                 Default::default()
             });
-            LspFormatting {
-                doc: text,
-                edits,
-                offset_encoding,
-            }
+            generate_transaction_from_edits(&text, edits, offset_encoding)
         };
         Some(fut)
     }
@@ -434,9 +436,10 @@ impl Document {
         self.save_impl::<futures_util::future::Ready<_>>(None)
     }
 
+    #[cfg(feature = "lsp")]
     pub fn format_and_save(
         &mut self,
-        formatting: Option<impl Future<Output = LspFormatting>>,
+        formatting: Option<impl Future<Output = Transaction>>,
     ) -> impl Future<Output = anyhow::Result<()>> {
         self.save_impl(formatting)
     }
@@ -447,7 +450,7 @@ impl Document {
     /// at its `path()`.
     ///
     /// If `formatting` is present, it supplies some changes that we apply to the text before saving.
-    fn save_impl<F: Future<Output = LspFormatting>>(
+    fn save_impl<F: Future<Output = Transaction>>(
         &mut self,
         formatting: Option<F>,
     ) -> impl Future<Output = Result<(), anyhow::Error>> {
@@ -456,8 +459,10 @@ impl Document {
 
         let mut text = self.text().clone();
         let path = self.path.clone().expect("Can't save with no path set!");
-        let identifier = self.identifier();
 
+        #[cfg(feature = "lsp")]
+        let identifier = self.identifier();
+        #[cfg(feature = "lsp")]
         let language_server = self.language_server.clone();
 
         // mark changes up to now as saved
@@ -476,7 +481,8 @@ impl Document {
             }
 
             if let Some(fmt) = formatting {
-                let success = Transaction::from(fmt.await).changes().apply(&mut text);
+                let transaction = fmt.await;
+                let success = transaction.changes().apply(&mut text);
                 if !success {
                     // This shouldn't happen, because the transaction changes were generated
                     // from the same text we're saving.
@@ -487,6 +493,7 @@ impl Document {
             let mut file = File::create(path).await?;
             to_writer(&mut file, encoding, &text).await?;
 
+            #[cfg(feature = "lsp")]
             if let Some(language_server) = language_server {
                 if !language_server.is_initialized() {
                     return Ok(());
@@ -603,6 +610,7 @@ impl Document {
         self.set_language(language_config, Some(config_loader));
     }
 
+    #[cfg(feature = "lsp")]
     /// Set the LSP.
     pub fn set_language_server(&mut self, language_server: Option<Arc<helix_lsp::Client>>) {
         self.language_server = language_server;
@@ -671,6 +679,7 @@ impl Document {
             }
 
             // emit lsp notification
+            #[cfg(feature = "lsp")]
             if let Some(language_server) = self.language_server() {
                 let notify = language_server.text_document_did_change(
                     self.versioned_identifier(),
@@ -848,6 +857,7 @@ impl Document {
         self.version
     }
 
+    #[cfg(feature = "lsp")]
     /// Language server if it has been initialized.
     pub fn language_server(&self) -> Option<&helix_lsp::Client> {
         let server = self.language_server.as_deref()?;
@@ -914,15 +924,18 @@ impl Document {
 
     // -- LSP methods
 
+    #[cfg(feature = "lsp")]
     #[inline]
     pub fn identifier(&self) -> lsp::TextDocumentIdentifier {
         lsp::TextDocumentIdentifier::new(self.url().unwrap())
     }
 
+    #[cfg(feature = "lsp")]
     pub fn versioned_identifier(&self) -> lsp::VersionedTextDocumentIdentifier {
         lsp::VersionedTextDocumentIdentifier::new(self.url().unwrap(), self.version)
     }
 
+    #[cfg(feature = "lsp")]
     pub fn position(
         &self,
         view_id: ViewId,
@@ -982,6 +995,7 @@ impl Default for Document {
 mod test {
     use super::*;
 
+    #[cfg(feature = "lsp")]
     #[test]
     fn changeset_to_changes_ignore_line_endings() {
         use helix_lsp::{lsp, Client, OffsetEncoding};
@@ -1016,6 +1030,7 @@ mod test {
         );
     }
 
+    #[cfg(feature = "lsp")]
     #[test]
     fn changeset_to_changes() {
         use helix_lsp::{lsp, Client, OffsetEncoding};

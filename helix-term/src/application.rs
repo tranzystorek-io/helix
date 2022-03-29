@@ -323,14 +323,12 @@ impl Application {
     pub async fn handle_signals(&mut self, signal: i32) {
         match signal {
             signal::SIGTSTP => {
-                self.compositor.save_cursor();
                 self.restore_term().unwrap();
                 low_level::emulate_default_handler(signal::SIGTSTP).unwrap();
             }
             signal::SIGCONT => {
                 self.claim_term().await.unwrap();
                 // redraw the terminal
-                self.compositor.load_cursor();
                 self.render();
             }
             _ => unreachable!(),
@@ -706,7 +704,12 @@ impl Application {
     }
 
     async fn claim_term(&mut self) -> Result<(), Error> {
+        use helix_view::graphics::CursorKind;
+        use tui::backend::Backend;
         terminal::enable_raw_mode()?;
+        if self.compositor.terminal.cursor_kind() == CursorKind::Hidden {
+            self.compositor.terminal.backend_mut().hide_cursor().ok();
+        }
         let mut stdout = stdout();
         execute!(stdout, terminal::EnterAlternateScreen)?;
         if self.config.load().editor.mouse {
@@ -716,7 +719,18 @@ impl Application {
     }
 
     fn restore_term(&mut self) -> Result<(), Error> {
+        use helix_view::graphics::CursorKind;
+        use tui::backend::Backend;
+        if self.compositor.terminal.cursor_kind() == CursorKind::Hidden {
+            self.compositor
+                .terminal
+                .backend_mut()
+                .show_cursor(CursorKind::Block)
+                .ok();
+        }
+
         let mut stdout = stdout();
+
         // reset cursor shape
         write!(stdout, "\x1B[2 q")?;
         // Ignore errors on disabling, this might trigger on windows if we call
